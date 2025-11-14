@@ -10,7 +10,13 @@ package-mode = false
 [tool.poetry.dependencies]
 python = "^3.12"
 ollama = "^0.6.1"
-
+google-api-python-client = "^2.187.0"
+google-auth-httplib2 = "^0.2.1"
+google-auth-oauthlib = "^1.2.3"
+google-auth = "^2.23.0"
+redis = "^5.0.0"
+matplotlib = "^3.8.0"
+python-dotenv = "^1.0.0"
 
 [build-system]
 requires = ["poetry-core"]
