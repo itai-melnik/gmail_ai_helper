@@ -3,6 +3,8 @@ from typing import Optional
 import re
 import json
 import ollama
+from dotenv import load_dotenv
+import matplotlib.pyplot as plt
 import google.auth.credentials
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -11,7 +13,7 @@ from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request
 from redis import Redis
 from prompts import CATEGORY_PROMPT, PRIORITY_PROMPT, RESPONSE_PROMPT
-from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -136,7 +138,14 @@ def call_llm_with_cache(email_id: str, prompt_type: str, email_data: dict) -> st
  
 
 def parse_llm_response(response: str, expected_fields: list[str]) -> dict:
+    #TODO: fix the parsing
     pass
+    # """parse the llm response and return the expected fields"""
+    # response_dict = json.loads(response)
+    # for field in expected_fields:
+    #     if field not in response_dict:
+    #         raise ValueError(f"Expected field {field} not found in response")
+    # return response_dict
 
 def analyze_email(email_data: dict) -> dict:
     """analyze the email based on the 3 categories: category, priority, response"""
@@ -158,20 +167,40 @@ def analyze_email(email_data: dict) -> dict:
             analysis[prompt_type] = response
     return analysis
 
-def process_emails(emails):
-    pass
-
-def create_visualization(data: list[dict]):
-    pass
-
-def main():
+def process_emails(num_emails: int) -> list[dict]:
+    """process the emails and return the analysis"""
+    analysis_dic = {'number_of_emails': num_emails, 'category': [], 'priority': [], 'response': []}
     creds = authenticate_gmail()
     service = build("gmail", "v1", credentials=creds)
-    emails = fetch_gmail(service, 1)
+    emails = fetch_gmail(service, num_emails)
     for email in emails:
-        print(email)
-        response = call_llm_with_cache(email["id"], "category", email)
-        print(response)
+        analysis = analyze_email(email)
+        analysis_dic['category'].append(analysis['category'])
+        analysis_dic['priority'].append(analysis['priority'])
+        analysis_dic['response'].append(analysis['response'])
+    return analysis_dic
 
+def create_visualization(data: dict):
+    """create a visualization of the data"""
+    plt.bar(data['category'].keys(), data['category'].values())
+    plt.xlabel('Category')
+    plt.ylabel('Count')
+    plt.title('Category Distribution')
+    plt.show()
+    plt.bar(data['priority'].keys(), data['priority'].values())
+    plt.xlabel('Priority')
+    plt.ylabel('Count')
+    plt.title('Priority Distribution')
+    plt.show()
+    plt.bar(data['response'].keys(), data['response'].values())
+    plt.xlabel('Response')
+    plt.ylabel('Count')
+    plt.title('Response Distribution')
+    plt.show()
+
+def main():
+    """main function"""
+    analysis_dic = process_emails(10)
+    print(analysis_dic)
 if __name__ == "__main__":
     main()
