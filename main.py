@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 import re
+import json
 import ollama
 import google.auth.credentials
 from google.oauth2.credentials import Credentials
@@ -15,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-
+redis_client = Redis(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), db=os.getenv("REDIS_DB"))
 
 
 def authenticate_gmail() -> Credentials:
@@ -46,13 +47,15 @@ def authenticate_gmail() -> Credentials:
             creds = flow.run_local_server(port=0)
 
         # Save updated or new token
-        with open("token.json", "w") as token:
+        with open("token.json", "w", encoding="utf-8") as token:
             token.write(creds.to_json())
 
     return creds
 
 def fetch_gmail(service, count=50) -> list[dict]:
     """Fetch the latest emails from the user's inbox."""
+    
+    cache_expiration = int(os.getenv("CACHE_TTL", "86400"))  # Default 24 hours
 
     result = (
         service.users()
@@ -66,52 +69,45 @@ def fetch_gmail(service, count=50) -> list[dict]:
         return None
 
     for message in messages:
-        msg = service.users().messages().get(userId="me", id=message["id"]).execute()
-        headers = msg.get("payload", {}).get("headers", [])
-        #Extract headers
-        header_dict = {}
-        for header in headers:
-            header_name = header.get("name")
-            if header_name in ("From", "Subject"):
-                header_dict[header_name] = header.get("value", "")
+        cache_key = generate_cache_key(message["id"], "email_data")
+        cached_data = redis_client.get(cache_key)
         
-        snippet = msg.get("snippet", "")
-        snippet = re.sub(r'[\u200b-\u200f\u202a-\u202e]', '', snippet).strip()
+        if cached_data:
+            # Deserialize from JSON
+            email_data = json.loads(cached_data)
+            print(f"✓ Cache hit: Email data for {message['id']}")
+        else:
+            # Cache miss - fetch from Gmail
+            print(f"✗ Cache miss: Fetching email {message['id']}")
+            msg = service.users().messages().get(userId="me", id=message["id"]).execute()
+            headers = msg.get("payload", {}).get("headers", [])
+            #Extract headers
+            header_dict = {}
+            for header in headers:
+                header_name = header.get("name")
+                if header_name in ("From", "Subject"):
+                    header_dict[header_name] = header.get("value", "")
+            
+            snippet = msg.get("snippet", "")
+            snippet = re.sub(r'[\u200b-\u200f\u202a-\u202e]', '', snippet).strip()
 
-        yield {
-            "id": message["id"],
-            "from": header_dict.get("From", ""),
-            "subject": header_dict.get("Subject", ""),
-            "snippet": snippet
-        }
+            email_data = {
+                "id": message["id"],
+                "from": header_dict.get("From", ""),
+                "subject": header_dict.get("Subject", ""),
+                "snippet": snippet
+            }
 
-    
+            # Serialize to JSON before storing
+            redis_client.setex(cache_key, cache_expiration, json.dumps(email_data))
 
+        yield email_data
 
-    #TODO: implement redis caching for emails.
-    #only fetch the headers of the messages that are not cached in redis. 
-    #use the cache key to check if the message is cached.
-    #if the message is not cached, fetch the headers and cache them.
-    #if the message is cached, return the cached headers.
-    #return the headers of the messages that are not cached.
-    # for message in messages:
-    #     if not redis_client.get(message["id"]):
-    #         headers = fetch_headers(service, message["id"])
-    #         redis_client.set(message["id"], headers)
-    #     else:
-    #         headers = redis_client.get(message["id"])
-    #     yield headers
-
-
-def get_redis_client():
-    """initialize the redis connection"""
-    redis_client = Redis(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), db=os.getenv("REDIS_DB"))
-    return redis_client
    
 
 def generate_cache_key(email_id: str, prompt_type: str) -> str:
-    pass
-
+    """generate a cache key for the prompt"""
+    return f"{email_id}_{prompt_type}"
 
 def call_llm_with_cache(email_id: str, prompt_type: str, email_data: dict) -> str:
     "call the llm with the cache if it exists, otherwise call the llm without the cache"
@@ -142,9 +138,25 @@ def call_llm_with_cache(email_id: str, prompt_type: str, email_data: dict) -> st
 def parse_llm_response(response: str, expected_fields: list[str]) -> dict:
     pass
 
-def analyze_email(redis_client, email_data: dict) -> dict:
-    pass
-
+def analyze_email(email_data: dict) -> dict:
+    """analyze the email based on the 3 categories: category, priority, response"""
+    cache_expiration = int(os.getenv("CACHE_TTL", "86400"))  # Default 24 hours
+    analysis = {}
+    for prompt_type in ["category", "priority", "response"]:
+        cache_key = generate_cache_key(email_data["id"], prompt_type)
+        cached_response = redis_client.get(cache_key)
+        
+        if cached_response:
+            # Deserialize from JSON
+            analysis[prompt_type] = json.loads(cached_response)
+            print(f"✓ Cache hit: {prompt_type} for {email_data['id']}")
+        else:
+            print(f"✗ Cache miss: Calling LLM for {prompt_type} on {email_data['id']}")
+            response = call_llm_with_cache(email_data["id"], prompt_type, email_data)
+            # Serialize to JSON before storing
+            redis_client.setex(cache_key, cache_expiration, json.dumps(response))
+            analysis[prompt_type] = response
+    return analysis
 
 def process_emails(emails):
     pass
