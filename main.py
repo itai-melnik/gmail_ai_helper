@@ -5,6 +5,7 @@ import json
 import ollama
 from dotenv import load_dotenv
 import matplotlib.pyplot as plt
+from collections import Counter
 import google.auth.credentials
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -114,7 +115,14 @@ def generate_cache_key(email_id: str, prompt_type: str) -> str:
 def call_llm_with_cache(email_id: str, prompt_type: str, email_data: dict) -> str:
     "call the llm with the cache if it exists, otherwise call the llm without the cache"
     model = os.getenv("OLLAMA_MODEL")
-    #TODO: first implement with a simple llm call
+
+    #Expected values for the prompt type
+    expected_map = {
+        "category": ["Work", "School", "Shopping", "Personal", "Spam"],
+        "priority": ["Urgent", "Important", "Normal", "Low"],
+        "response": ["Yes", "No"]
+    }
+
 
     #fetch prompt from prompts.py
     if prompt_type == "category":
@@ -126,26 +134,42 @@ def call_llm_with_cache(email_id: str, prompt_type: str, email_data: dict) -> st
     else:
         raise ValueError(f"Invalid prompt type: {prompt_type}")
 
-        
+    
     response = ollama.chat(
         model=model, 
         messages=[
-            {"role": "system", "content": "Only respond in JSON format. e.g {'category': 'Work'}. Do not include any other text or comments."},
             {"role": "user", "content": prompt}
         ]
     )
-    return response
+
+    #extract the text and parse
+    response_text = response.message.content.strip()
+    parsed_response = parse_llm_response(response_text, expected_map[prompt_type])
+
+
+    return parsed_response
  
 
-def parse_llm_response(response: str, expected_fields: list[str]) -> dict:
-    #TODO: fix the parsing
-    pass
-    # """parse the llm response and return the expected fields"""
-    # response_dict = json.loads(response)
-    # for field in expected_fields:
-    #     if field not in response_dict:
-    #         raise ValueError(f"Expected field {field} not found in response")
-    # return response_dict
+def parse_llm_response(response_text: str, expected_values: list[str]) -> str:
+    """Parse plain text LLM response and extract the expected value"""
+    response_text = response_text.strip()
+    
+    # Try exact match first (case-insensitive)
+    for value in expected_values:
+        if value.lower() in response_text.lower():
+            return value
+    
+    # Fallback: return first word capitalized
+    first_word = response_text.split()[0] if response_text else expected_values[-1]
+    
+    # Try fuzzy match on first word
+    for value in expected_values:
+        if first_word.lower() == value.lower():
+            return value
+    
+    # Default to last option (most conservative)
+    return expected_values[-1]
+
 
 def analyze_email(email_data: dict) -> dict:
     """analyze the email based on the 3 categories: category, priority, response"""
@@ -167,6 +191,17 @@ def analyze_email(email_data: dict) -> dict:
             analysis[prompt_type] = response
     return analysis
 
+
+def aggregate_results(analysis_data: dict) -> dict:
+    """Count occurrences of each category/priority/response"""
+    return {
+        'category': dict(Counter(analysis_data['category'])),
+        'priority': dict(Counter(analysis_data['priority'])),
+        'response': dict(Counter(analysis_data['response'])),
+        'total': analysis_data['number_of_emails']
+    }
+
+
 def process_emails(num_emails: int) -> list[dict]:
     """process the emails and return the analysis"""
     analysis_dic = {'number_of_emails': num_emails, 'category': [], 'priority': [], 'response': []}
@@ -181,26 +216,58 @@ def process_emails(num_emails: int) -> list[dict]:
     return analysis_dic
 
 def create_visualization(data: dict):
-    """create a visualization of the data"""
-    plt.bar(data['category'].keys(), data['category'].values())
-    plt.xlabel('Category')
-    plt.ylabel('Count')
-    plt.title('Category Distribution')
+    """Create multiple visualizations"""
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # 1. Category Pie Chart
+    if data['category']:
+        axes[0, 0].pie(data['category'].values(), labels=data['category'].keys(), autopct='%1.1f%%')
+        axes[0, 0].set_title('Email Categories')
+    
+    # 2. Priority Bar Chart
+    if data['priority']:
+        axes[0, 1].barh(list(data['priority'].keys()), list(data['priority'].values()))
+        axes[0, 1].set_xlabel('Count')
+        axes[0, 1].set_title('Priority Distribution')
+    
+    # 3. Response Needed Pie Chart
+    if data['response']:
+        axes[1, 0].pie(data['response'].values(), labels=data['response'].keys(), autopct='%1.1f%%')
+        axes[1, 0].set_title('Response Needed')
+    
+    # 4. Summary Stats
+    axes[1, 1].axis('off')
+    summary_text = f"Total Emails: {data['total']}\n\n"
+    summary_text += "Top Category:\n" + max(data['category'].items(), key=lambda x: x[1])[0] + "\n\n"
+    summary_text += "Most Common Priority:\n" + max(data['priority'].items(), key=lambda x: x[1])[0]
+    axes[1, 1].text(0.1, 0.5, summary_text, fontsize=14, verticalalignment='center')
+    
+    plt.tight_layout()
     plt.show()
-    plt.bar(data['priority'].keys(), data['priority'].values())
-    plt.xlabel('Priority')
-    plt.ylabel('Count')
-    plt.title('Priority Distribution')
-    plt.show()
-    plt.bar(data['response'].keys(), data['response'].values())
-    plt.xlabel('Response')
-    plt.ylabel('Count')
-    plt.title('Response Distribution')
-    plt.show()
+
+
 
 def main():
     """main function"""
-    analysis_dic = process_emails(10)
-    print(analysis_dic)
+    num_emails = int(os.getenv("EMAIL_COUNT", "10"))
+
+    print(f"Processing {num_emails} emails...")
+    analysis_data = process_emails(num_emails)
+
+    print("\nAggregating results...")
+    aggregated = aggregate_results(analysis_data)
+
+    print("\n=== Results ===")
+    print(f"Total emails analyzed: {aggregated['total']}")
+    print(f"Categories: {aggregated['category']}")
+    print(f"Priorities: {aggregated['priority']}")
+    print(f"Response needed: {aggregated['response']}")
+
+    print("\nGenerating visualizations...")
+    create_visualization(aggregated)
+
+
+
+
 if __name__ == "__main__":
     main()
