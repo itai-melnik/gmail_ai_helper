@@ -24,6 +24,10 @@ From: {sender}
 Subject: {subject}
 Preview: {body_preview}
 
+Rules:
+- Say "Yes" if from work, school, or a friend
+- Say "No" if it's marketing, ads, newsletters, automated messages, or no-reply emails
+
 Answer with only: Yes or No
 
 Response needed:"""
